@@ -72,8 +72,24 @@ class GopherQualityFilter(BaseFilter):
         words = split_into_words(text, self.language)
         n_words = len(words)
 
-        non_symbol_words = [w for w in words if any(ch not in PUNCTUATION_SET for ch in w)]
-        n_non_symbol_words_words = len(non_symbol_words)
+        n_non_symbol_words_words = 0
+        non_symbol_chars = 0
+        alpha_words = 0
+        for word in words:
+            has_non_symbol = False
+            has_alpha = False
+            for char in word:
+                if char not in PUNCTUATION_SET:
+                    has_non_symbol = True
+                if char.isalpha():
+                    has_alpha = True
+                if has_non_symbol and has_alpha:
+                    break
+            if has_non_symbol:
+                n_non_symbol_words_words += 1
+                non_symbol_chars += len(word)
+            if has_alpha:
+                alpha_words += 1
 
         # words < min_doc_words or words > max_doc_words
         if self.min_doc_words and n_non_symbol_words_words < self.min_doc_words:
@@ -82,39 +98,47 @@ class GopherQualityFilter(BaseFilter):
             return False, "gopher_long_doc"
 
         # mean word length is outside the range of 3 to 10 characters
-        avg_n_words = np.mean([len(w) for w in non_symbol_words])
+        if n_non_symbol_words_words:
+            avg_n_words = non_symbol_chars / n_non_symbol_words_words
+        else:
+            avg_n_words = np.mean([])
         if self.min_avg_word_length and avg_n_words < self.min_avg_word_length:
             return False, "gopher_below_avg_threshold"
         if self.max_avg_word_length and avg_n_words > self.max_avg_word_length:
             return False, "gopher_above_avg_threshold"
 
         # symbol-to-word ratio greater than 0.1 for either the hash symbol or the ellipsis
-        if self.max_symbol_word_ratio and text.count("#") / n_words > self.max_symbol_word_ratio:
-            return False, "gopher_too_many_hashes"
-        if self.max_symbol_word_ratio and (text.count("...") + text.count("…")) / n_words > self.max_symbol_word_ratio:
-            return False, "gopher_too_many_ellipsis"
+        if self.max_symbol_word_ratio:
+            if text.count("#") / n_words > self.max_symbol_word_ratio:
+                return False, "gopher_too_many_hashes"
+            if (text.count("...") + text.count("…")) / n_words > self.max_symbol_word_ratio:
+                return False, "gopher_too_many_ellipsis"
 
         # any document with more than 90 % of lines starting with a bullet point,
         # or more than 30 % ending with an ellipsis.
         lines = text.splitlines()
-        if (
-            self.max_bullet_lines_ratio
-            and sum(s.lstrip().startswith("•") or s.lstrip().startswith("-") for s in lines) / len(lines)
-            > self.max_bullet_lines_ratio
-        ):
-            return False, "gopher_too_many_bullets"
-        if (
-            self.max_ellipsis_lines_ratio
-            and sum(s.rstrip().endswith("...") or s.rstrip().endswith("…") for s in lines) / len(lines)
-            > self.max_ellipsis_lines_ratio
-        ):
-            return False, "gopher_too_many_end_ellipsis"
+        if self.max_bullet_lines_ratio:
+            bullet_lines = 0
+            for line in lines:
+                stripped_line = line.lstrip()
+                if stripped_line.startswith("•") or stripped_line.startswith("-"):
+                    bullet_lines += 1
+            if bullet_lines / len(lines) > self.max_bullet_lines_ratio:
+                return False, "gopher_too_many_bullets"
+        if self.max_ellipsis_lines_ratio:
+            ellipsis_lines = 0
+            for line in lines:
+                stripped_line = line.rstrip()
+                if stripped_line.endswith("...") or stripped_line.endswith("…"):
+                    ellipsis_lines += 1
+            if ellipsis_lines / len(lines) > self.max_ellipsis_lines_ratio:
+                return False, "gopher_too_many_end_ellipsis"
 
         # that 80 % of words in a document contain at least one alphabetic character
         if (
             self.max_non_alpha_words_ratio
             # nb of words with at least 1 alpha char < 0.8
-            and sum([any((c.isalpha() for c in w)) for w in words]) / n_words < self.max_non_alpha_words_ratio
+            and alpha_words / n_words < self.max_non_alpha_words_ratio
         ):
             return False, "gopher_below_alpha_threshold"
 
